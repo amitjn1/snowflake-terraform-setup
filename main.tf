@@ -1,28 +1,24 @@
 terraform {
   required_providers {
     snowflake = {
-      source  = "chanzuckerberg/snowflake"
-      version = "0.22.0"
+      source  = "Snowflake-Labs/snowflake"
+      version = "~> 0.76"
     }
   }
 }
 
 provider "snowflake" {
-  alias = "sys_admin"
-  role  = "SYSADMIN"
+  role = "SYSADMIN"
 }
 
 resource "snowflake_database" "db" {
-  provider = snowflake.sys_admin
-  name     = "TF_DEMO"
+  name = "RAW_TEST"
 }
 
 resource "snowflake_warehouse" "warehouse" {
-  provider       = snowflake.sys_admin
-  name           = "TF_DEMO"
-  warehouse_size = "large"
-
-  auto_suspend = 60
+  name           = "LOAD_TEST_WH"
+  warehouse_size = "x-small"
+  auto_suspend   = 60
 }
 
 provider "snowflake" {
@@ -32,39 +28,42 @@ provider "snowflake" {
 
 resource "snowflake_role" "role" {
   provider = snowflake.security_admin
-  name     = "TF_DEMO_SVC_ROLE"
+  name     = "LOAD_SVC_ROLE"
 }
 
-resource "snowflake_database_grant" "grant" {
-  provider          = snowflake.security_admin
-  database_name     = snowflake_database.db.name
-  privilege         = "USAGE"
-  roles             = [snowflake_role.role.name]
-  with_grant_option = false
+resource "snowflake_grant_privileges_to_role" "database_grant" {
+  provider   = snowflake.security_admin
+  privileges = ["USAGE"]
+  role_name  = snowflake_role.role.name
+  on_account_object {
+    object_type = "DATABASE"
+    object_name = snowflake_database.db.name
+  }
 }
 
 resource "snowflake_schema" "schema" {
-  provider   = snowflake.sys_admin
   database   = snowflake_database.db.name
-  name       = "TF_DEMO"
+  name       = "CLICK_STREAM_TEST"
   is_managed = false
 }
 
-resource "snowflake_schema_grant" "grant" {
-  provider          = snowflake.security_admin
-  database_name     = snowflake_database.db.name
-  schema_name       = snowflake_schema.schema.name
-  privilege         = "USAGE"
-  roles             = [snowflake_role.role.name]
-  with_grant_option = false
+resource "snowflake_grant_privileges_to_role" "schema_grant" {
+  provider   = snowflake.security_admin
+  privileges = ["USAGE"]
+  role_name  = snowflake_role.role.name
+  on_schema {
+    schema_name = "\"${snowflake_database.db.name}\".\"${snowflake_schema.schema.name}\""
+  }
 }
 
-resource "snowflake_warehouse_grant" "grant" {
-  provider          = snowflake.security_admin
-  warehouse_name    = snowflake_warehouse.warehouse.name
-  privilege         = "USAGE"
-  roles             = [snowflake_role.role.name]
-  with_grant_option = false
+resource "snowflake_grant_privileges_to_role" "warehouse_grant" {
+  provider   = snowflake.security_admin
+  privileges = ["USAGE"]
+  role_name  = snowflake_role.role.name
+  on_account_object {
+    object_type = "WAREHOUSE"
+    object_name = snowflake_warehouse.warehouse.name
+  }
 }
 
 resource "tls_private_key" "svc_key" {
@@ -73,12 +72,22 @@ resource "tls_private_key" "svc_key" {
 }
 
 resource "snowflake_user" "user" {
-  provider          = snowflake.security_admin
-  name              = "tf_demo_user"
-  default_warehouse = snowflake_warehouse.warehouse.name
-  default_role      = snowflake_role.role.name
-  default_namespace = "${snowflake_database.db.name}.${snowflake_schema.schema.name}"
-  rsa_public_key    = substr(tls_private_key.svc_key.public_key_pem, 27, 398)
+    provider          = snowflake.security_admin
+    name              = "data_load_user"
+    default_warehouse = snowflake_warehouse.warehouse.name
+    default_role      = snowflake_role.role.name
+    default_namespace = "${snowflake_database.db.name}.${snowflake_schema.schema.name}"
+    rsa_public_key    = substr(tls_private_key.svc_key.public_key_pem, 27, 398)
+}
+
+resource "snowflake_grant_privileges_to_role" "user_grant" {
+  provider   = snowflake.security_admin
+  privileges = ["MONITOR"]
+  role_name  = snowflake_role.role.name
+  on_account_object {
+    object_type = "USER"
+    object_name = snowflake_user.user.name
+  }
 }
 
 resource "snowflake_role_grants" "grants" {
